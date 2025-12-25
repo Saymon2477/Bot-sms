@@ -1,8 +1,10 @@
-
 import telebot
 import time
 import requests
 import os
+import shutil
+import threading
+from flask import Flask
 from telebot import types
 
 # --- কনফিগারেশন ---
@@ -10,39 +12,52 @@ API_TOKEN = '8463139658:AAECrUe1JeoVV7MoQgyG3Pj452RsfoYV0E8'
 FIREBASE_URL = 'https://otp-bot-611a8-default-rtdb.firebaseio.com' 
 ADMIN_PASSWORD = '1122'
 ADMIN_URL = 'https://t.me/ftcaiw24'
-GROUP_URL = 'https://t.me/ftc_sms_chat'  # ওটিপি না পেলে এখানে যাবে
-CHANNEL_URL = 'https://t.me/ftc_sms'      # আপডেটের জন্য চ্যানেল
+GROUP_URL = 'https://t.me/ftc_sms_chat'
+CHANNEL_URL = 'https://t.me/ftc_sms'
 NUMBERS_DIR = 'numbers/'
 
 bot = telebot.TeleBot(API_TOKEN)
 
-# ফায়ারবেজ হেল্পার ফাংশন
+# --- ১. রেন্ডার কিপ-এলাইভ (Flask Server) ---
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Bot is Running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
+
+threading.Thread(target=run_flask).start()
+
+# --- ২. ফায়ারবেজ হেল্পার ফাংশন ---
 def db_save(path, data):
     requests.put(f"{FIREBASE_URL}/{path}.json", json=data)
 
 def db_get(path):
-    res = requests.get(f"{FIREBASE_URL}/{path}.json")
-    return res.json()
+    try:
+        res = requests.get(f"{FIREBASE_URL}/{path}.json")
+        return res.json()
+    except:
+        return None
 
-# --- মেইন মেনু ---
+def db_delete(path):
+    requests.delete(f"{FIREBASE_URL}/{path}.json")
+
+# --- ৩. মেইন মেনু ---
 def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_get = types.InlineKeyboardButton("🚀 Get Number", callback_data="select_server")
-    btn_admin = types.InlineKeyboardButton("👨‍💻 Admin", url=ADMIN_URL)
-    btn_group = types.InlineKeyboardButton("👥 Support Group", url=GROUP_URL)
-    btn_channel = types.InlineKeyboardButton("📢 Update Channel", url=CHANNEL_URL)
-    
-    markup.add(btn_get)
-    markup.add(btn_admin, btn_group)
-    markup.add(btn_channel)
+    markup.add(types.InlineKeyboardButton("🚀 Get Number", callback_data="select_server"))
+    markup.add(types.InlineKeyboardButton("👨‍💻 Admin", url=ADMIN_URL),
+               types.InlineKeyboardButton("👥 Group", url=GROUP_URL))
+    markup.add(types.InlineKeyboardButton("📢 Channel", url=CHANNEL_URL))
     return markup
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "🔐 *Online OTP System Active* ✅\n\nনাম্বার নিতে নিচের বাটন চাপুন। সব ধরনের আপডেটের জন্য আমাদের চ্যানেলে জয়েন থাকুন।", 
+    bot.send_message(message.chat.id, "🔐 *Online OTP System Active* ✅\n\nনাম্বার নিতে নিচের বাটন চাপুন।", 
                      parse_mode="Markdown", reply_markup=main_menu())
 
-# --- ইউজার সেকশন (সার্ভার লিস্ট) ---
+# --- ৪. ইউজার সেকশন (সার্ভার ও নাম্বার) ---
 @bot.callback_query_handler(func=lambda call: call.data == "select_server")
 def select_server(call):
     markup = types.InlineKeyboardMarkup()
@@ -52,7 +67,7 @@ def select_server(call):
     
     if not files:
         markup.add(types.InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home"))
-        bot.edit_message_text("❌ কোনো সার্ভার পাওয়া যায়নি!", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text("❌ কোনো সার্ভার বা নাম্বার লোড করা নেই!", call.message.chat.id, call.message.message_id, reply_markup=markup)
         return
 
     for s in files:
@@ -61,7 +76,6 @@ def select_server(call):
     markup.add(types.InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home"))
     bot.edit_message_text("একটি সার্ভার সিলেক্ট করুন:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-# --- নাম্বার ডেলিভারি লজিক ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("srv_"))
 def handle_number(call):
     server = call.data.split("_")[1]
@@ -83,106 +97,163 @@ def handle_number(call):
         db_save(f"user_progress/{user_id}", {"index": index, "server": server})
         
         markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(types.InlineKeyboardButton("🔄 Get Next Number", callback_data=f"srv_{server}"))
-        markup.add(types.InlineKeyboardButton("📩 Get SMS", callback_data=f"check_{phone}"))
-        markup.add(types.InlineKeyboardButton("📢 Channel", url=CHANNEL_URL), 
-                   types.InlineKeyboardButton("⬅️ Back", callback_data="select_server"))
+        markup.add(types.InlineKeyboardButton("🔄 Get Next", callback_data=f"srv_{server}"),
+                   types.InlineKeyboardButton("📩 Get SMS", callback_data=f"check_{phone}"))
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="select_server"))
         
         bot.edit_message_text(f"🌍 *Server:* {server.upper()}\n🔢 *Serial:* {index + 1}\n☎️ *Number:* `{phone}`", 
                               call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
     else:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="select_server"))
-        bot.edit_message_text("❌ এই সার্ভারে আর কোনো নাম্বার নেই!", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.answer_callback_query(call.id, "এই সার্ভারে আর নাম্বার নেই!", show_alert=True)
 
-# --- এসএমএস চেক লজিক ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("check_"))
 def check_sms(call):
     phone = call.data.split("_")[1]
     now = int(time.time())
-    
     data = db_get(f"sms_logs/{phone}")
     
     if data and abs(now - data['timestamp']) <= 60:
-        response = f"🔐 *New OTP Received* ✅\n\n☎️ *Number:* `{phone}`\n💬 *Message:*\n`{data['message']}`"
-        bot.send_message(call.message.chat.id, response, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, f"🔐 *OTP Received* ✅\n\n☎️ `{phone}`\n💬 `{data['message']}`", parse_mode="Markdown")
     else:
-        # ওটিপি না পেলে গ্রুপে জয়েন করতে বলা
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("👥 Join Group for OTP", url=GROUP_URL))
-        bot.send_message(call.message.chat.id, "❌ মেসেজ এখনো আসেনি। যদি ওটিপি না পান তবে আমাদের গ্রুপে যোগাযোগ করুন।", 
-                         reply_markup=markup)
-        bot.answer_callback_query(call.id, "অপেক্ষা করুন...", show_alert=False)
+        markup.add(types.InlineKeyboardButton("👥 Join Group", url=GROUP_URL))
+        bot.send_message(call.message.chat.id, "❌ মেসেজ এখনো আসেনি।", reply_markup=markup)
 
-# --- ব্যাক টু হোম বাটন ---
 @bot.callback_query_handler(func=lambda call: call.data == "back_home")
 def back_home(call):
-    bot.edit_message_text("🔐 *Online OTP System Active* ✅\n\nসার্ভার থেকে নাম্বার নিতে বাটন চাপুন।", 
-                          call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=main_menu())
+    bot.edit_message_text("🔐 *Online OTP System Active* ✅", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=main_menu())
 
-# --- এডমিন সেকশন (আগের মতো) ---
-@bot.message_handler(func=lambda m: m.text and m.text.lower() == 'admin')
-def admin_login(message):
-    msg = bot.reply_to(message, "🔐 এডমিন পাসওয়ার্ড দিন:")
-    bot.register_next_step_handler(msg, process_password)
-
-def process_password(message):
-    if message.text == ADMIN_PASSWORD:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("➕ Add Number", callback_data="adm_add"),
-                   types.InlineKeyboardButton("🗑️ Delete Server", callback_data="adm_del"))
-        markup.add(types.InlineKeyboardButton("⬅️ Exit Admin", callback_data="back_home"))
-        bot.send_message(message.chat.id, "✅ এডমিন লগইন সফল!", reply_markup=markup)
-    else:
-        bot.send_message(message.chat.id, "❌ ভুল পাসওয়ার্ড!")
-
-@bot.callback_query_handler(func=lambda call: call.data == "adm_add")
-def adm_add_srv(call):
-    bot.edit_message_text("সার্ভারের নাম লিখুন:", call.message.chat.id, call.message.message_id)
-    bot.register_next_step_handler(call.message, get_srv_name)
-
-def get_srv_name(message):
-    server = message.text.lower()
-    msg = bot.send_message(message.chat.id, f"📦 {server}-এর জন্য নাম্বার দিন (প্রতি লাইনে একটি):")
-    bot.register_next_step_handler(msg, lambda m: final_add(m, server))
-
-def final_add(message, server):
-    nums = message.text.strip()
-    if not os.path.exists(NUMBERS_DIR): os.makedirs(NUMBERS_DIR)
-    with open(os.path.join(NUMBERS_DIR, f"{server}.txt"), 'a') as f:
-        f.write(nums + "\n")
-    bot.send_message(message.chat.id, f"✅ {server}-এ নাম্বার সেভ হয়েছে!", reply_markup=main_menu())
-
-@bot.callback_query_handler(func=lambda call: call.data == "adm_del")
-def adm_del_list(call):
-    markup = types.InlineKeyboardMarkup()
-    files = [f.replace('.txt', '') for f in os.listdir(NUMBERS_DIR) if f.endswith('.txt')]
-    for s in files:
-        markup.add(types.InlineKeyboardButton(f"🗑️ Delete {s}", callback_data=f"conf_del_{s}"))
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="back_home"))
-    bot.edit_message_text("কোনটি ডিলিট করবেন?", call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("conf_del_"))
-def conf_del(call):
-    srv = call.data.split("_")[2]
-    os.remove(os.path.join(NUMBERS_DIR, f"{srv}.txt"))
-    bot.answer_callback_query(call.id, f"✅ {srv} ডিলিট করা হয়েছে।", show_alert=True)
-    adm_del_list(call)
-
-# --- কনসোল আপডেট কমান্ড ---
+# --- ৫. কনসোল থেকে ডাটাবেজ আপডেট ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("DB_ADD:"))
 def remote_db_add(message):
     try:
-        raw_data = message.text.replace("DB_ADD:", "").split("|")
-        phone = raw_data[0].strip()
-        msg_text = raw_data[1].strip()
-        now = int(time.time())
-        db_save(f"sms_logs/{phone}", {"message": msg_text, "timestamp": now})
-        bot.reply_to(message, f"✅ Database Updated: {phone}")
+        raw = message.text.replace("DB_ADD:", "").split("|")
+        phone, msg = raw[0].strip(), raw[1].strip()
+        db_save(f"sms_logs/{phone}", {"message": msg, "timestamp": int(time.time())})
+        bot.reply_to(message, f"✅ DB Updated: {phone}")
+    except: pass
+
+# ==========================================
+#              ৬. এডমিন প্যানেল (New)
+# ==========================================
+
+@bot.message_handler(commands=['admin'])
+def admin_login(message):
+    msg = bot.reply_to(message, "🔐 *Admin Login*\nদয়া করে পাসওয়ার্ড দিন:", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, verify_password)
+
+def verify_password(message):
+    if message.text == ADMIN_PASSWORD:
+        show_admin_panel(message.chat.id)
+    else:
+        bot.reply_to(message, "❌ ভুল পাসওয়ার্ড!")
+
+def show_admin_panel(chat_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("➕ Add New Server / Numbers", callback_data="adm_add_srv"))
+    markup.add(types.InlineKeyboardButton("🧹 Clean Old OTPs (1 Hour)", callback_data="adm_clean_otp"))
+    markup.add(types.InlineKeyboardButton("🗑️ Delete Specific Server", callback_data="adm_del_srv"))
+    markup.add(types.InlineKeyboardButton("⚠️ Delete ALL Servers", callback_data="adm_del_all"))
+    markup.add(types.InlineKeyboardButton("🚪 Logout", callback_data="back_home"))
+    bot.send_message(chat_id, "⚙️ *Admin Dashboard*\nঅপশন সিলেক্ট করুন:", parse_mode="Markdown", reply_markup=markup)
+
+# --- Clean OTP Logic ---
+@bot.callback_query_handler(func=lambda call: call.data == "adm_clean_otp")
+def clean_old_otps(call):
+    bot.answer_callback_query(call.id, "Checking database...")
+    logs = db_get("sms_logs")
+    if not logs:
+        bot.send_message(call.message.chat.id, "❌ ডাটাবেজ খালি!")
+        return
+
+    count = 0
+    now = int(time.time())
+    for phone, data in logs.items():
+        # ১ ঘন্টা (৩৬০০ সেকেন্ড) এর পুরনো ডাটা ডিলিট
+        if now - data['timestamp'] > 3600:
+            db_delete(f"sms_logs/{phone}")
+            count += 1
+    
+    bot.send_message(call.message.chat.id, f"✅ ক্লিন সম্পন্ন!\n🗑️ মোট {count} টি পুরনো ওটিপি ডিলিট করা হয়েছে।")
+    show_admin_panel(call.message.chat.id)
+
+# --- Add Server Logic ---
+@bot.callback_query_handler(func=lambda call: call.data == "adm_add_srv")
+def adm_ask_name(call):
+    msg = bot.send_message(call.message.chat.id, "📝 সার্ভারের নাম লিখুন (উদা: facebook, whatsapp):")
+    bot.register_next_step_handler(msg, adm_get_name)
+
+def adm_get_name(message):
+    server_name = message.text.lower().strip()
+    msg = bot.send_message(message.chat.id, f"📦 *{server_name.upper()}* এর জন্য নাম্বার লিস্ট পেস্ট করুন:\n(প্রতি লাইনে একটি করে নাম্বার)", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, lambda m: adm_save_numbers(m, server_name))
+
+def adm_save_numbers(message, server_name):
+    numbers = message.text.strip()
+    if not numbers:
+        bot.send_message(message.chat.id, "❌ কোনো নাম্বার পাওয়া যায়নি।")
+        return
+
+    if not os.path.exists(NUMBERS_DIR): os.makedirs(NUMBERS_DIR)
+    
+    # নতুন ফাইল তৈরি হবে অথবা আগের ফাইলে নাম্বার যোগ হবে (Append Mode)
+    file_path = os.path.join(NUMBERS_DIR, f"{server_name}.txt")
+    with open(file_path, 'a') as f:
+        f.write(numbers + "\n")
+    
+    line_count = len(numbers.split('\n'))
+    bot.send_message(message.chat.id, f"✅ *{server_name.upper()}* সার্ভারে {line_count} টি নাম্বার সেভ হয়েছে!", parse_mode="Markdown")
+    show_admin_panel(message.chat.id)
+
+# --- Delete Specific Server ---
+@bot.callback_query_handler(func=lambda call: call.data == "adm_del_srv")
+def adm_show_del_list(call):
+    markup = types.InlineKeyboardMarkup()
+    if not os.path.exists(NUMBERS_DIR): os.makedirs(NUMBERS_DIR)
+    files = [f.replace('.txt', '') for f in os.listdir(NUMBERS_DIR) if f.endswith('.txt')]
+    
+    if not files:
+        bot.answer_callback_query(call.id, "কোনো সার্ভার নেই!", show_alert=True)
+        return
+
+    for s in files:
+        markup.add(types.InlineKeyboardButton(f"🗑️ Delete {s.upper()}", callback_data=f"del_confirm_{s}"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="back_admin"))
+    bot.edit_message_text("কোন সার্ভারটি ডিলিট করতে চান?", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("del_confirm_"))
+def adm_del_process(call):
+    server = call.data.split("_")[2]
+    try:
+        os.remove(os.path.join(NUMBERS_DIR, f"{server}.txt"))
+        bot.answer_callback_query(call.id, "Deleted!", show_alert=True)
+        bot.send_message(call.message.chat.id, f"✅ {server} সার্ভারটি ডিলিট করা হয়েছে।")
     except:
-        pass
+        bot.send_message(call.message.chat.id, "❌ ডিলিট করতে সমস্যা হয়েছে।")
+    show_admin_panel(call.message.chat.id)
+
+# --- Delete ALL Servers ---
+@bot.callback_query_handler(func=lambda call: call.data == "adm_del_all")
+def adm_del_all_confirm(call):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⚠️ YES, DELETE ALL", callback_data="adm_nuke_yes"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="back_admin"))
+    bot.edit_message_text("⚠️ আপনি কি নিশ্চিত সব সার্ভার ও নাম্বার ডিলিট করতে চান?", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "adm_nuke_yes")
+def adm_nuke(call):
+    if os.path.exists(NUMBERS_DIR):
+        shutil.rmtree(NUMBERS_DIR) # পুরো ফোল্ডার ডিলিট
+        os.makedirs(NUMBERS_DIR)   # আবার খালি ফোল্ডার তৈরি
+    bot.send_message(call.message.chat.id, "💥 সব সার্ভার ও নাম্বার ডিলিট করা হয়েছে!")
+    show_admin_panel(call.message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_admin")
+def back_admin(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    show_admin_panel(call.message.chat.id)
 
 if __name__ == "__main__":
     if not os.path.exists(NUMBERS_DIR): os.makedirs(NUMBERS_DIR)
-    print("🤖 Bot is Running with Support Group & Update Channel...")
+    print("🤖 Bot is Running with Advanced Admin Panel...")
     bot.polling(none_stop=True)
